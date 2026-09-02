@@ -9,6 +9,7 @@ import { env } from "./config/env.js";
 import { logger } from "./config/pino.js";
 import { notFoundMiddleware } from "./middleware/not-found.middleware.js";
 import { errorMiddleware } from "./middleware/error.middleware.js";
+import authRoutes from "./modules/auth/auth.routes.js";
 
 const app = express();
 
@@ -52,11 +53,7 @@ app.get("/health", (_req, res) => {
     });
 });
 
-// API routes will go here
-//
-// app.use("/api/v1/auth", authRoutes);
-// app.use("/api/v1/users", userRoutes);
-// app.use("/api/v1/characters", characterRoutes);
+app.use("/api/v1/auth", authRoutes);
 
 app.use(notFoundMiddleware);
 app.use(errorMiddleware);
