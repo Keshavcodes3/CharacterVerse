@@ -10,6 +10,7 @@ import { logger } from "./config/pino.js";
 import { notFoundMiddleware } from "./middleware/not-found.middleware.js";
 import { errorMiddleware } from "./middleware/error.middleware.js";
 import authRoutes from "./modules/auth/auth.routes.js";
+import characterRoutes from "./modules/characters/character.routes.js";
 
 const app = express();
 
@@ -54,6 +55,7 @@ app.get("/health", (_req, res) => {
 });
 
 app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/characters", characterRoutes);
 
 app.use(notFoundMiddleware);
 app.use(errorMiddleware);
