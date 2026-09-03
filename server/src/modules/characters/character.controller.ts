@@ -22,7 +22,8 @@ export class CharacterController {
     getOne = asyncHandler(async (req: Request, res: Response) => {
         const { id } = req.params as { id: string };
         const requesterId = req.user?.id;
-        const character = await this.characterService.getByIdOrSlug(id, requesterId);
+        const role = (req.user as unknown as { role?: string })?.role;
+        const character = await this.characterService.getByIdOrSlug(id, requesterId, role);
         return apiSuccess(res, {
             message: "Character fetched",
             data: { character },
@@ -109,7 +110,8 @@ export class CharacterController {
     update = asyncHandler(async (req: Request, res: Response) => {
         const userId = req.user!.id;
         const { id } = req.params as { id: string };
-        const character = await this.characterService.update(id, userId, req.body);
+        const role = (req.user as unknown as { role?: string })?.role;
+        const character = await this.characterService.update(id, userId, req.body, role);
         return apiSuccess(res, {
             message: "Character updated",
             data: { character },
@@ -119,8 +121,43 @@ export class CharacterController {
     delete = asyncHandler(async (req: Request, res: Response) => {
         const userId = req.user!.id;
         const { id } = req.params as { id: string };
-        await this.characterService.delete(id, userId);
+        const role = (req.user as unknown as { role?: string })?.role;
+        await this.characterService.delete(id, userId, role);
         return apiSuccess(res, { message: "Character deleted" });
+    });
+
+    publish = asyncHandler(async (req: Request, res: Response) => {
+        const userId = req.user!.id;
+        const { id } = req.params as { id: string };
+        const role = (req.user as unknown as { role?: string })?.role;
+        const character = await this.characterService.publish(id, userId, role);
+        return apiSuccess(res, { message: "Character published", data: { character } });
+    });
+    archive = asyncHandler(async (req: Request, res: Response) => {
+        const userId = req.user!.id;
+        const { id } = req.params as { id: string };
+        const role = (req.user as unknown as { role?: string })?.role;
+        const character = await this.characterService.archive(id, userId, role);
+        return apiSuccess(res, { message: "Character archived", data: { character } });
+    });
+    suspend = asyncHandler(async (req: Request, res: Response) => {
+        const { id } = req.params as { id: string };
+        const role = (req.user as unknown as { role?: string })?.role;
+        const character = await this.characterService.suspend(id, req.user!.id, role);
+        return apiSuccess(res, { message: "Character suspended", data: { character } });
+    });
+    restore = asyncHandler(async (req: Request, res: Response) => {
+        const userId = req.user!.id;
+        const { id } = req.params as { id: string };
+        const role = (req.user as unknown as { role?: string })?.role;
+        const character = await this.characterService.restore(id, userId, role);
+        return apiSuccess(res, { message: "Character restored", data: { character } });
+    });
+    duplicate = asyncHandler(async (req: Request, res: Response) => {
+        const userId = req.user!.id;
+        const { id } = req.params as { id: string };
+        const character = await this.characterService.duplicate(id, userId);
+        return apiSuccess(res, { statusCode: 201, message: "Character duplicated", data: { character } });
     });
 
     toggleLike = asyncHandler(async (req: Request, res: Response) => {

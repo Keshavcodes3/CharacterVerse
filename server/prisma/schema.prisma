@@ -62,6 +62,14 @@ enum Visibility {
   PRIVATE
 }
 
+enum CharacterStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+  SUSPENDED
+  DELETED
+}
+
 enum ConversationStatus {
   ACTIVE
   ARCHIVED
@@ -71,7 +79,33 @@ enum ConversationStatus {
 enum MessageRole {
   USER
   CHARACTER
+  ASSISTANT
   SYSTEM
+  TOOL
+}
+
+enum OutboxStatus {
+  PENDING
+  PROCESSING
+  PROCESSED
+  FAILED
+}
+
+enum MessageType {
+  OPENING_SCENE
+  TEXT
+  TOOL_CALL
+  SYSTEM_EVENT
+}
+
+enum GenerationStatus {
+  QUEUED
+  RUNNING
+  PENDING
+  STREAMING
+  COMPLETED
+  FAILED
+  CANCELLED
 }
 
 enum AttachmentType {
@@ -91,6 +125,83 @@ enum MemoryType {
 enum Theme {
   LIGHT
   DARK
+}
+
+enum DocumentStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+  DELETED
+}
+
+enum IngestionStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum ReportStatus {
+  PENDING
+  REVIEWED
+  DISMISSED
+  ACTIONED
+}
+
+enum ModerationTargetType {
+  CHARACTER
+  MESSAGE
+  USER
+  DOCUMENT
+}
+
+enum ModerationCaseStatus {
+  OPEN
+  REVIEWING
+  RESOLVED
+  DISMISSED
+}
+
+enum ModerationDecision {
+  ALLOW
+  BLOCK
+  REVIEW
+  SUSPEND
+  RESTORE
+  ARCHIVE
+  DELETE
+  WARN
+}
+
+enum AuditAction {
+  CHARACTER_CREATED
+  CHARACTER_UPDATED
+  CHARACTER_PUBLISHED
+  CHARACTER_SUSPENDED
+  CHARACTER_RESTORED
+  CHARACTER_ARCHIVED
+  CHARACTER_DELETED
+  MESSAGE_CREATED
+  MESSAGE_BLOCKED
+  MESSAGE_REMOVED
+  USER_SUSPENDED
+  USER_BANNED
+  USER_RESTORED
+  REPORT_CREATED
+  REPORT_REVIEWED
+  MODERATION_DECIDED
+  DOCUMENT_REMOVED
+  KNOWLEDGE_ACCESS_DENIED
+}
+
+enum ReportReason {
+  SPAM
+  HARASSMENT
+  INAPPROPRIATE_CONTENT
+  IMPERSONATION
+  COPYRIGHT
+  OTHER
 }
 
 enum NotificationType {
@@ -129,6 +240,11 @@ model User {
   transactions    Transaction[]
   following       Follow[] @relation("UserFollowsFollower")
   followers       Follow[] @relation("UserFollowsFollowing")
+  reports         Report[]
+  moderationCases ModerationCase[] @relation("ModerationReporter")
+  assignedCases   ModerationCase[] @relation("ModerationAssignee")
+  moderationActions ModerationAction[]
+  auditLogs       AuditLog[]
 }
 
 model Session {
@@ -203,30 +319,48 @@ model UserPreferences {
 }
 
 model Character {
-  id          String     @id @default(uuid())
+  id          String          @id @default(uuid())
   creatorId   String
-  creator     User       @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  creator     User            @relation(fields: [creatorId], references: [id], onDelete: Cascade)
   name        String
-  slug        String     @unique
-  description String     @db.Text
-  greeting    String     @db.Text
+  slug        String          @unique
+  description String          @db.Text
+  greeting    String          @db.Text
   avatarUrl   String?
-  visibility  Visibility @default(PUBLIC)
+  visibility  Visibility      @default(PUBLIC)
+  status      CharacterStatus @default(DRAFT)
+  version     Int             @default(1)
+  currentVersionId String?    @unique
+  currentVersion   CharacterVersion? @relation("CurrentVersion", fields: [currentVersionId], references: [id])
   category    String[]
   tags        String[]
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  // normalized tags lowercased, deduped via service
+  publishedAt DateTime?
+  archivedAt  DateTime?
+  // denormalized counters for discovery sorting, updated idempotently
+  favoritesCount Int @default(0)
+  chatCount      Int @default(0)
+  viewsCount     Int @default(0)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
 
   personality       CharacterPersonality?
+  profile           CharacterProfile?
+  versions          CharacterVersion[] @relation("CharacterVersions")
   examples          CharacterExample[]
   conversations     Conversation[]
   bookmarks         Bookmark[]
   likes             Like[]
   memories          Memory[]
   memoryCollections MemoryCollection[]
+  knowledgeBases    KnowledgeBase[]
+  reports           Report[]
+  views             CharacterView[]
 
   @@index([creatorId])
   @@index([visibility])
+  @@index([status])
+  @@index([creatorId, status])
 }
 
 model CharacterPersonality {
@@ -244,6 +378,58 @@ model CharacterPersonality {
   character        Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
+}
+
+model CharacterProfile {
+  id          String @id @default(uuid())
+  characterId String @unique
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  motivations        String? @db.Text
+  fears              String? @db.Text
+  strengths          String? @db.Text
+  weaknesses         String? @db.Text
+  interests          String[] @default([])
+  dislikes           String[] @default([])
+  speechStyle        String? @db.Text
+  vocabulary         String? @db.Text
+  emotionalTendencies String? @db.Text
+  behavioralRules    Json?   // string[]
+  conversationalRules Json?  // string[]
+  relationshipStyle  String? @db.Text
+  summary            String? @db.Text
+
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model CharacterVersion {
+  id          String @id @default(uuid())
+  characterId String
+  character   Character @relation("CharacterVersions", fields: [characterId], references: [id], onDelete: Cascade)
+
+  version     Int
+  name        String
+  description String @db.Text
+  greeting    String @db.Text
+  avatarUrl   String?
+
+  personalitySnapshot Json // CharacterPersonality snapshot
+  profileSnapshot     Json? // CharacterProfile snapshot
+  examplesSnapshot    Json? // CharacterExample[]
+  tags        String[]
+  category    String[]
+
+  createdAt DateTime @default(now())
+  createdBy String?
+
+  currentFor Character? @relation("CurrentVersion")
+
+  conversations Conversation[]
+
+  @@unique([characterId, version])
+  @@index([characterId])
 }
 
 model CharacterExample {
@@ -267,11 +453,17 @@ model Conversation {
 
   userId      String
   characterId String
+  characterVersionId String?
+  characterVersion   CharacterVersion? @relation(fields: [characterVersionId], references: [id], onDelete: SetNull)
 
   title   String?
   summary String? @db.Text
 
   status ConversationStatus @default(ACTIVE)
+  // concurrency: generation lock
+  generationLockId String?   @unique
+  lockedAt         DateTime?
+  version          Int       @default(1) // optimistic lock
 
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
@@ -281,11 +473,13 @@ model Conversation {
   character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
 
   messages Message[]
+  generations Generation[]
 
   @@index([userId, createdAt])
   @@index([characterId, createdAt])
   @@index([userId, characterId])
   @@index([lastMessageAt])
+  @@index([characterVersionId])
 }
 
 model Message {
@@ -294,7 +488,20 @@ model Message {
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   role    MessageRole
+  messageType MessageType @default(TEXT)
   content String    @db.Text
+
+  sequence Int
+  characterVersionId String?
+  // idempotency: same key returns same message, prevents duplicate LLM gen
+  idempotencyKey String?
+  generationId   String?
+
+  modelProvider String?
+  modelName     String?
+  inputTokens   Int?
+  outputTokens  Int?
+  tokenUsage    Json?
 
   attachments Json?
   metadata    Json?
@@ -303,7 +510,10 @@ model Message {
   messageAttachmentId String?
   messageAttachment   MessageAttachment? @relation(fields: [messageAttachmentId], references: [id])
 
+  @@unique([conversationId, sequence])
+  @@unique([conversationId, idempotencyKey])
   @@index([conversationId, createdAt])
+  @@index([generationId])
 }
 
 model MessageAttachment {
@@ -337,6 +547,98 @@ model Follow {
   @@unique([followerId, followingId])
   @@index([followerId])
   @@index([followingId])
+}
+
+model Report {
+  id          String       @id @default(uuid())
+  reporterId  String
+  reporter    User         @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+  characterId String
+  character   Character    @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  reason      ReportReason
+  description String?      @db.Text
+  status      ReportStatus @default(PENDING)
+  metadata    Json?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  reviewedAt  DateTime?
+  reviewedBy  String?
+
+  @@unique([reporterId, characterId, reason])
+  @@index([characterId, status])
+  @@index([reporterId])
+  @@index([status])
+}
+
+model ModerationCase {
+  id         String               @id @default(uuid())
+  targetType ModerationTargetType
+  targetId   String
+  reason     ReportReason
+  description String? @db.Text
+  status     ModerationCaseStatus @default(OPEN)
+  priority   Int                  @default(0)
+  reporterId String?
+  reporter   User?                @relation("ModerationReporter", fields: [reporterId], references: [id], onDelete: SetNull)
+  assigneeId String?
+  assignee   User?                @relation("ModerationAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  metadata   Json?
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
+  resolvedAt DateTime?
+
+  actions ModerationAction[]
+
+  @@index([targetType, targetId])
+  @@index([status, priority])
+  @@index([reporterId])
+  @@index([assigneeId])
+}
+
+model ModerationAction {
+  id        String             @id @default(uuid())
+  caseId    String
+  case      ModerationCase     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  actorId   String
+  actor     User               @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  decision  ModerationDecision
+  reason    String?            @db.Text
+  metadata  Json?
+  createdAt DateTime           @default(now())
+
+  @@index([caseId])
+  @@index([actorId])
+}
+
+model AuditLog {
+  id         String      @id @default(uuid())
+  actorId    String?
+  actor      User?       @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  actorRole  String?
+  action     AuditAction
+  targetType ModerationTargetType?
+  targetId   String?
+  reason     String?     @db.Text
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime    @default(now())
+
+  @@index([actorId])
+  @@index([targetType, targetId])
+  @@index([action, createdAt])
+  @@index([createdAt])
+}
+
+model CharacterView {
+  id          String   @id @default(uuid())
+  characterId String
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  userId      String?
+  createdAt   DateTime @default(now())
+
+  @@index([characterId, createdAt])
+  @@index([userId])
 }
 
 model Bookmark {
@@ -394,6 +696,9 @@ model Memory {
   id String @id @default(uuid())
 
   characterId String
+  // scoping: memory belongs to user+character+conversation context
+  userId         String?
+  conversationId String?
 
   type    MemoryType
   content String @db.Text
@@ -412,7 +717,147 @@ model Memory {
 
   @@index([characterId])
   @@index([characterId, type])
+  @@index([userId, characterId])
+  @@index([conversationId])
   @@index([expiresAt])
+}
+
+model Generation {
+  id             String           @id @default(uuid())
+  conversationId String
+  conversation   Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  messageId     String? @unique
+  userMessageId String? @unique
+
+  status GenerationStatus @default(QUEUED)
+  provider String?
+  model    String?
+
+  inputTokens  Int?
+  outputTokens Int?
+  latencyMs    Int?
+  errorCode    String?
+
+  error   String? @db.Text
+  metadata Json?
+
+  requestId String?
+
+  createdAt   DateTime  @default(now())
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  @@index([conversationId, createdAt])
+  @@index([status])
+}
+
+model OutboxEvent {
+  id            String       @id @default(uuid())
+  aggregateType String
+  aggregateId   String
+  eventType     String
+  payload       Json
+  status        OutboxStatus @default(PENDING)
+  attempts      Int          @default(0)
+  nextAttemptAt DateTime?
+  lastError     String?      @db.Text
+  createdAt     DateTime     @default(now())
+  processedAt   DateTime?
+
+  @@index([status, nextAttemptAt])
+  @@index([aggregateType, aggregateId])
+  @@index([createdAt])
+}
+
+model KnowledgeBase {
+  id          String @id @default(uuid())
+  characterId String
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  name        String
+  slug        String
+  description String? @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  documents KnowledgeDocument[]
+  chunks    KnowledgeChunk[]
+
+  @@unique([characterId, slug])
+  @@index([characterId])
+}
+
+model KnowledgeDocument {
+  id              String         @id @default(uuid())
+  characterId     String
+  knowledgeBaseId String?
+  knowledgeBase   KnowledgeBase? @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  // RAG: documents are scoped to character/knowledgeBase, owned by creator
+  title       String
+  content     String         @db.Text
+  rawContent  String?        @db.Text
+  source      String?
+  sourceUrl   String?
+  mimeType    String?
+  fileUrl     String?
+  fileSize    Int?
+  status      DocumentStatus @default(PENDING)
+  error       String?        @db.Text
+  chunkCount  Int            @default(0)
+  metadata    Json?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  chunks        KnowledgeChunk[]
+  ingestionJob  IngestionJob?
+
+  @@index([characterId])
+  @@index([knowledgeBaseId])
+  @@index([status])
+  @@index([characterId, status])
+}
+
+model KnowledgeChunk {
+  id              String           @id @default(uuid())
+  documentId      String
+  document        KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  knowledgeBaseId String?
+  knowledgeBase   KnowledgeBase?    @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  characterId     String
+
+  content   String @db.Text
+  chunkIndex Int
+  page      Int?
+  section   String?
+  source    String?
+  metadata  Json?
+  embedding Unsupported("vector")?
+  model     String?
+
+  createdAt DateTime @default(now())
+
+  @@index([documentId])
+  @@index([knowledgeBaseId])
+  @@index([characterId])
+  @@index([characterId, knowledgeBaseId])
+}
+
+model IngestionJob {
+  id              String          @id @default(uuid())
+  documentId      String          @unique
+  document        KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  characterId     String
+  knowledgeBaseId String?
+  status          IngestionStatus @default(PENDING)
+  attempts        Int             @default(0)
+  lastError       String?         @db.Text
+  payload         Json?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  nextAttemptAt   DateTime?
+
+  @@index([status, nextAttemptAt])
+  @@index([characterId])
 }
 
 model MemoryEmbedding {

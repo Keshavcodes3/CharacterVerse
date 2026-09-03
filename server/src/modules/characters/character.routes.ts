@@ -5,6 +5,7 @@ import { createAuthMiddleware } from "../auth/middleware/auth.middleware.js";
 import { AuthRepository } from "../auth/repositories/auth.repository.js";
 import { AuthService } from "../auth/services/auth.service.js";
 import { CharacterRepository } from "./character.repository.js";
+import { CharacterVersionRepository } from "./characterVersion.repository.js";
 import { CharacterService } from "./character.service.js";
 import { CharacterController } from "./character.controller.js";
 import {
@@ -23,7 +24,8 @@ const authService = new AuthService(authRepository);
 const { requireAuth } = createAuthMiddleware(authService);
 
 const characterRepository = new CharacterRepository(prisma);
-const characterService = new CharacterService(characterRepository);
+const characterVersionRepository = new CharacterVersionRepository(prisma);
+const characterService = new CharacterService(characterRepository, characterVersionRepository);
 const characterController = new CharacterController(characterService);
 
 const router = Router();
@@ -45,16 +47,24 @@ const optionalAuth: typeof requireAuth = async (req, _res, next) => {
     }
 };
 
+import { characterCreateLimit, searchRateLimit } from "../../middleware/rate-limit.middleware.js";
+
 // Authenticated (must be before /:id to avoid param collision)
 router.get("/me/mine", requireAuth, validate(listCharactersQuerySchema), characterController.listMine);
-router.post("/", requireAuth, validate(createCharacterSchema), characterController.create);
+router.post("/", requireAuth, characterCreateLimit, validate(createCharacterSchema), characterController.create);
 
 // Public
-router.get("/", validate(listCharactersQuerySchema), optionalAuth, characterController.list);
+router.get("/", searchRateLimit, validate(listCharactersQuerySchema), optionalAuth, characterController.list);
 router.get("/:id", validate(getCharacterParamsSchema), optionalAuth, characterController.getOne);
 
 router.patch("/:id", requireAuth, validate(updateCharacterSchema), characterController.update);
 router.delete("/:id", requireAuth, validate(deleteCharacterParamsSchema), characterController.delete);
+
+router.post("/:id/publish", requireAuth, validate(getCharacterParamsSchema), characterController.publish);
+router.post("/:id/archive", requireAuth, validate(getCharacterParamsSchema), characterController.archive);
+router.post("/:id/suspend", requireAuth, validate(getCharacterParamsSchema), characterController.suspend);
+router.post("/:id/restore", requireAuth, validate(getCharacterParamsSchema), characterController.restore);
+router.post("/:id/duplicate", requireAuth, validate(getCharacterParamsSchema), characterController.duplicate);
 
 router.post("/:id/like", requireAuth, validate(likeParamsSchema), characterController.toggleLike);
 router.post("/:id/bookmark", requireAuth, validate(bookmarkParamsSchema), characterController.toggleBookmark);

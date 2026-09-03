@@ -4,6 +4,9 @@ import type { CharacterListFilters } from "./character.types.js";
 
 const characterInclude = {
     personality: true,
+    profile: true,
+    currentVersion: true,
+    versions: { orderBy: { version: "desc" as const }, take: 5 },
     examples: true,
     creator: { select: { id: true, username: true, avatarUrl: true } },
     _count: { select: { likes: true, bookmarks: true } },
@@ -124,12 +127,14 @@ export class CharacterRepository {
         return true;
     }
 
-    async list(filters: CharacterListFilters) {
+    async list(filters: CharacterListFilters & { status?: string }) {
         const where: Prisma.CharacterWhereInput = {};
 
         if (filters.visibility) {
             where.visibility = filters.visibility;
         }
+        if ((filters as unknown as Record<string, unknown>).status) where.status = (filters as unknown as Record<string, unknown>).status as never;
+        else where.status = { not: "DELETED" } as never;
 
         if (filters.creatorId) {
             where.creatorId = filters.creatorId;
@@ -173,6 +178,7 @@ export class CharacterRepository {
             },
         };
     }
+    // list without @ts-expect-error - filters.status handled via where.status directly
 
     async listPublic(filters: Omit<CharacterListFilters, "visibility">) {
         return this.list({ ...filters, visibility: "PUBLIC" });
@@ -243,6 +249,106 @@ export class CharacterRepository {
                 data,
                 include: characterInclude,
             });
+        });
+    }
+
+    async updateWithVersionBump(
+        id: string,
+        data: Prisma.CharacterUpdateInput,
+        personality?: {
+            traits?: unknown;
+            backstory?: string;
+            personality?: string;
+            lore?: string | null;
+            knowledge?: string | null;
+            scenario?: string | null;
+            exampleDialogues?: unknown | null;
+        },
+        examples?: Array<{ title?: string; content: string; isDialogue?: boolean }>,
+        actorId?: string,
+    ) {
+        return this.db.$transaction(async (tx) => {
+            if (personality !== undefined) {
+                await tx.characterPersonality.upsert({
+                    where: { characterId: id },
+                    create: {
+                        characterId: id,
+                        traits: (personality.traits as Prisma.InputJsonValue) ?? Prisma.JsonNull,
+                        backstory: personality.backstory ?? "",
+                        personality: personality.personality ?? "",
+                        lore: personality.lore ?? null,
+                        knowledge: personality.knowledge ?? null,
+                        scenario: personality.scenario ?? null,
+                        exampleDialogues: (personality.exampleDialogues as Prisma.InputJsonValue) ?? Prisma.JsonNull,
+                    },
+                    update: {
+                        ...(personality.traits !== undefined && { traits: personality.traits as Prisma.InputJsonValue }),
+                        ...(personality.backstory !== undefined && { backstory: personality.backstory }),
+                        ...(personality.personality !== undefined && { personality: personality.personality }),
+                        ...(personality.lore !== undefined && { lore: personality.lore }),
+                        ...(personality.knowledge !== undefined && { knowledge: personality.knowledge }),
+                        ...(personality.scenario !== undefined && { scenario: personality.scenario }),
+                        ...(personality.exampleDialogues !== undefined && { exampleDialogues: personality.exampleDialogues as Prisma.InputJsonValue }),
+                    },
+                });
+            }
+            if (examples !== undefined) {
+                await tx.characterExample.deleteMany({ where: { characterId: id } });
+                if (examples.length > 0) await tx.characterExample.createMany({ data: examples.map((e) => ({ characterId: id, title: e.title ?? null, content: e.content, isDialogue: e.isDialogue ?? true })) });
+            }
+
+            const current = await tx.character.findUnique({ where: { id }, include: { personality: true, profile: true, examples: true } });
+            if (!current) throw new Error("Character not found");
+
+            const updated = await tx.character.update({
+                where: { id },
+                data: { ...data, version: { increment: 1 } },
+                include: { personality: true, profile: true, examples: true },
+            });
+
+            // snapshot new version
+            const version = await tx.characterVersion.create({
+                data: {
+                    characterId: id,
+                    version: updated.version,
+                    name: updated.name,
+                    description: updated.description,
+                    greeting: updated.greeting,
+                    avatarUrl: updated.avatarUrl,
+                    personalitySnapshot: updated.personality as unknown as Prisma.InputJsonValue,
+                    profileSnapshot: updated.profile as unknown as Prisma.InputJsonValue,
+                    examplesSnapshot: updated.examples as unknown as Prisma.InputJsonValue,
+                    tags: updated.tags,
+                    category: updated.category,
+                    createdBy: actorId,
+                },
+            });
+            await tx.character.update({ where: { id }, data: { currentVersionId: version.id } });
+
+            await tx.outboxEvent.create({
+                data: {
+                    aggregateType: "Character",
+                    aggregateId: id,
+                    eventType: "CharacterUpdated",
+                    payload: { characterId: id, version: updated.version } as unknown as Prisma.InputJsonValue,
+                    status: "PENDING",
+                },
+            });
+
+            return tx.character.findUnique({ where: { id }, include: characterInclude });
+        });
+    }
+
+    async transitionStatus(id: string, to: "PUBLISHED" | "ARCHIVED" | "SUSPENDED" | "DRAFT" | "DELETED", eventType: string) {
+        return this.db.$transaction(async (tx) => {
+            const data: Record<string, unknown> = { status: to };
+            if (to === "PUBLISHED") data.publishedAt = new Date();
+            if (to === "ARCHIVED") data.archivedAt = new Date();
+            const updated = await tx.character.update({ where: { id }, data: data as never, include: characterInclude });
+            await tx.outboxEvent.create({
+                data: { aggregateType: "Character", aggregateId: id, eventType, payload: { characterId: id, status: to } as unknown as Prisma.InputJsonValue, status: "PENDING" },
+            });
+            return updated;
         });
     }
 
