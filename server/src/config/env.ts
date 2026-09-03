@@ -15,6 +15,21 @@ const envSchema = z.object({
     LOG_LEVEL: z
         .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
         .default("info"),
+
+    // AI provider API keys — optional in validation so the server can boot
+    // without all providers configured; individual providers throw at runtime
+    // if their key is missing when instantiated.
+    GOOGLE_API_KEY: z.string().min(1).optional(),
+    GEMINI_API_KEY: z.string().min(1).optional(),
+    GROQ_API_KEY: z.string().min(1).optional(),
+    MISTRAL_API_KEY: z.string().min(1).optional(),
 });
 
 export const env = envSchema.parse(process.env);
+
+/**
+ * Resolved Gemini API key — supports both GOOGLE_API_KEY (LangChain convention)
+ * and GEMINI_API_KEY (Google AI Studio convention). GOOGLE_API_KEY takes precedence.
+ */
+export const getGeminiApiKey = (): string | undefined =>
+    env.GOOGLE_API_KEY ?? env.GEMINI_API_KEY;
